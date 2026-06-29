@@ -113,6 +113,35 @@ test('POST /commands with a bogus cmd streams an error event and ends', async ()
   }
 });
 
+test('bearer auth blocks missing token but allows health', async () => {
+  const app = createApp({ bearer: 'secret' });
+  const s = app.listen(0);
+  await new Promise((r) => s.once('listening', r));
+  const b = `http://127.0.0.1:${s.address().port}`;
+  assert.equal((await fetch(`${b}/health`)).status, 200); // exempt
+  assert.equal(
+    (
+      await fetch(`${b}/files/list`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"path":"/tmp"}',
+      })
+    ).status,
+    401,
+  );
+  assert.equal(
+    (
+      await fetch(`${b}/files/list`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer secret' },
+        body: '{"path":"/tmp"}',
+      })
+    ).status,
+    200,
+  );
+  s.close();
+});
+
 // helper: read SSE data lines until `done(evt)` true or stream ends
 async function readSse(res, done) {
   const reader = res.body.getReader();
