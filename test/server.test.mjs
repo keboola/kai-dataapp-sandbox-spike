@@ -60,6 +60,59 @@ test('POST /commands streams stdout and a pid', async () => {
   assert.ok(text.some((e) => e.type === 'stdout' && e.chunk.includes('hi')));
 });
 
+test('stdin is delivered to the child and echoed on stdout', async () => {
+  const res = await fetch(`${base}/commands`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      cmd: 'node',
+      args: [
+        '-e',
+        "let b='';process.stdin.on('data',d=>{b+=d;if(b.includes('\\n')){process.stdout.write('echo:'+b);process.exit(0);}})",
+      ],
+    }),
+  });
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  // read the pid event
+  const first = JSON.parse(dec.decode((await reader.read()).value).split('data: ')[1]);
+  assert.equal(first.type, 'pid');
+  await fetch(`${base}/commands/${first.pid}/stdin`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ data: 'ping' }),
+  });
+  let got = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    got += dec.decode(value);
+    if (got.includes('echo:ping')) break;
+  }
+  assert.ok(got.includes('echo:ping'));
+  await reader.cancel();
+});
+
+test('POST /commands with a bogus cmd streams an error event and ends', async () => {
+  // Bound the request: without a child.on('error') handler the SSE stream never
+  // ends, so readSse would hang forever. The AbortController turns that hang into
+  // a prompt, deterministic failure instead of a runner timeout / leaked socket.
+  const ctrl = new AbortController();
+  const guard = setTimeout(() => ctrl.abort(), 5000);
+  try {
+    const res = await fetch(`${base}/commands`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ cmd: 'definitely-not-a-real-binary-xyz' }),
+      signal: ctrl.signal,
+    });
+    const events = await readSse(res, (evt) => evt.type === 'error');
+    assert.ok(events.some((e) => e.type === 'error' && typeof e.error === 'string'));
+  } finally {
+    clearTimeout(guard);
+  }
+});
+
 // helper: read SSE data lines until `done(evt)` true or stream ends
 async function readSse(res, done) {
   const reader = res.body.getReader();
