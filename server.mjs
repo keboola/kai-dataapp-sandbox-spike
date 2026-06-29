@@ -1,5 +1,6 @@
 import express from 'express';
 import { bearerAuth } from './lib/auth.mjs';
+import { mountFiles } from './lib/files.mjs';
 
 export function createApp({ bearer } = {}) {
   const app = express();
@@ -9,6 +10,8 @@ export function createApp({ bearer } = {}) {
   // Platform startup probe: python-js base image POSTs to "/" — must answer 200.
   app.all('/', (_req, res) => res.status(200).send('kai-dataapp-sandbox'));
   app.get('/health', (_req, res) => res.json({ ok: true }));
+
+  mountFiles(app);
 
   return app;
 }
