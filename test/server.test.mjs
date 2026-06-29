@@ -47,3 +47,41 @@ test('files write rejects disallowed root', async () => {
   });
   assert.equal(res.status, 400);
 });
+
+test('POST /commands streams stdout and a pid', async () => {
+  const res = await fetch(`${base}/commands`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ cmd: 'node', args: ['-e', "process.stdout.write('hi\\n')"] }),
+  });
+  assert.equal(res.headers.get('content-type'), 'text/event-stream');
+  const text = await readSse(res, (evt) => evt.type === 'exit');
+  assert.ok(text.some((e) => e.type === 'pid' && typeof e.pid === 'number'));
+  assert.ok(text.some((e) => e.type === 'stdout' && e.chunk.includes('hi')));
+});
+
+// helper: read SSE data lines until `done(evt)` true or stream ends
+async function readSse(res, done) {
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  const events = [];
+  let buf = '';
+  for (;;) {
+    const { value, done: end } = await reader.read();
+    if (end) break;
+    buf += dec.decode(value, { stream: true });
+    const parts = buf.split('\n\n');
+    buf = parts.pop() ?? '';
+    for (const part of parts) {
+      const line = part.split('\n').find((l) => l.startsWith('data: '));
+      if (!line) continue;
+      const evt = JSON.parse(line.slice(6));
+      events.push(evt);
+      if (done(evt)) {
+        await reader.cancel();
+        return events;
+      }
+    }
+  }
+  return events;
+}

@@ -1,6 +1,7 @@
 import express from 'express';
 import { bearerAuth } from './lib/auth.mjs';
 import { mountFiles } from './lib/files.mjs';
+import { mountCommands } from './lib/commands.mjs';
 
 export function createApp({ bearer } = {}) {
   const app = express();
@@ -12,6 +13,7 @@ export function createApp({ bearer } = {}) {
   app.get('/health', (_req, res) => res.json({ ok: true }));
 
   mountFiles(app);
+  mountCommands(app);
 
   return app;
 }
