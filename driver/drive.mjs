@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const RUNTIME_DIR = '/opt/kai-agent';
+// R8: on a non-root data app the entrypoint's default dirs (/opt/kai-agent, /home/user/workspace)
+// aren't writable, so these are overridable. Defaults keep M1 (local Docker, root) unchanged.
+const RUNTIME_DIR = process.env.KAI_RUNTIME_DIR ?? '/opt/kai-agent';
+const WORKSPACE_DIR = process.env.KAI_WORKSPACE_DIR ?? '/home/user/workspace';
 
 function cfg() {
   const baseUrl = process.env.SANDBOX_URL ?? 'http://localhost:3000';
@@ -24,7 +27,16 @@ function collectRuntimeFiles(distDir) {
   const files = [{ name: 'package.json', content: '{"type":"module"}\n' }];
   for (const name of fs.readdirSync(distDir).sort()) {
     if (name.endsWith('.js') && name !== 'index.js') {
-      files.push({ name, content: fs.readFileSync(path.join(distDir, name), 'utf8') });
+      let content = fs.readFileSync(path.join(distDir, name), 'utf8');
+      if (name === 'config.js') {
+        // R8 relocation: repoint the entrypoint's hardcoded runtime/workspace dirs (the only
+        // place they're literal-encoded; TOOL_RESULTS_DIR derives from WORKSPACE_DIR). No-op
+        // when RUNTIME_DIR/WORKSPACE_DIR equal the originals (M1).
+        content = content
+          .replaceAll("'/home/user/workspace'", `'${WORKSPACE_DIR}'`)
+          .replaceAll("'/opt/kai-agent'", `'${RUNTIME_DIR}'`);
+      }
+      files.push({ name, content });
     }
   }
   // Skills: siblings of dist/ → skills/ and vendored-skills/. Spike simplification:
@@ -162,7 +174,7 @@ async function runTurn({ baseUrl, bearer, prompt, env }) {
   await streamCommand(
     baseUrl,
     bearer,
-    { cmd: 'node', args: ['/opt/kai-agent/entrypoint.js'], env, cwd: '/home/user/workspace' },
+    { cmd: 'node', args: [`${RUNTIME_DIR}/entrypoint.js`], env, cwd: WORKSPACE_DIR },
     async (evt) => {
       if (evt.type === 'pid') {
         pid = evt.pid;
