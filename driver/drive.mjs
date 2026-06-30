@@ -166,16 +166,25 @@ async function runTurn({ baseUrl, bearer, prompt, env }) {
     async (evt) => {
       if (evt.type === 'pid') {
         pid = evt.pid;
-        await fetch(`${baseUrl}/commands/${pid}/stdin`, {
+        const sres = await fetch(`${baseUrl}/commands/${pid}/stdin`, {
           method: 'POST',
           headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
           body: JSON.stringify({ data: JSON.stringify({ prompt }) }),
         });
+        if (!sres.ok) {
+          console.error(`\n[stdin failed] ${sres.status} ${await sres.text()}`);
+          return true;
+        }
         return false;
       }
       if (evt.type === 'stderr') {
         process.stderr.write(`[stderr] ${evt.chunk}`);
         return false;
+      }
+      // Stop (don't hang) on a host spawn-error event or process exit.
+      if (evt.type === 'error') {
+        console.error('\n[spawn error]', evt.error);
+        return true;
       }
       if (evt.type === 'exit') {
         return true;
