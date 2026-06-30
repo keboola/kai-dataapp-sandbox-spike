@@ -6,6 +6,46 @@ import path from 'node:path';
 const RUNTIME_DIR = process.env.KAI_RUNTIME_DIR ?? '/opt/kai-agent';
 const WORKSPACE_DIR = process.env.KAI_WORKSPACE_DIR ?? '/home/user/workspace';
 
+// M2: when driving a deployed data app, requests go through apps-proxy, which gates with a
+// form-login that sets a session cookie (NOT HTTP Basic). Set APP_PASSWORD to enable. The same
+// handshake a real kai-agent->data-app integration would perform.
+let appCookie = '';
+
+function appHeaders(bearer, json = true) {
+  const h = {};
+  if (json) h['content-type'] = 'application/json';
+  if (bearer) h.authorization = `Bearer ${bearer}`;
+  if (appCookie) h.cookie = appCookie;
+  return h;
+}
+
+async function loginAppsProxy(baseUrl, password) {
+  const jar = new Map();
+  const merge = (res) => {
+    for (const c of res.headers.getSetCookie?.() ?? []) {
+      const kv = c.split(';')[0];
+      const i = kv.indexOf('=');
+      if (i > 0) jar.set(kv.slice(0, i).trim(), kv.slice(i + 1).trim());
+    }
+  };
+  const cookieStr = () => [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
+  const g = await fetch(`${baseUrl}/`, { redirect: 'manual' });
+  merge(g);
+  const m = (await g.text()).match(/name="_csrf" value="([^"]+)"/);
+  if (!m) throw new Error('apps-proxy login: no _csrf on login page');
+  const body = new URLSearchParams({ password, _csrf: m[1], submit: '' }).toString();
+  const p = await fetch(`${baseUrl}/`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: cookieStr() },
+    body,
+  });
+  merge(p);
+  appCookie = cookieStr();
+  if (!appCookie) throw new Error('apps-proxy login: no session cookie after POST');
+  console.log('apps-proxy login ok');
+}
+
 function cfg() {
   const baseUrl = process.env.SANDBOX_URL ?? 'http://localhost:3000';
   const bearer = process.env.SANDBOX_BEARER ?? 'devsecret';
@@ -17,7 +57,7 @@ function cfg() {
 async function writeFile(baseUrl, bearer, p, data) {
   const res = await fetch(`${baseUrl}/files/write`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
+    headers: appHeaders(bearer),
     body: JSON.stringify({ path: p, data }),
   });
   if (!res.ok) throw new Error(`write ${p} failed: ${res.status} ${await res.text()}`);
@@ -79,7 +119,7 @@ export async function uploadRuntime({ baseUrl, bearer, distDir }) {
 async function streamCommand(baseUrl, bearer, spec, onEvent) {
   const res = await fetch(`${baseUrl}/commands`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
+    headers: appHeaders(bearer),
     body: JSON.stringify(spec),
   });
   if (!res.ok) throw new Error(`/commands failed: ${res.status} ${await res.text()}`);
@@ -180,7 +220,7 @@ async function runTurn({ baseUrl, bearer, prompt, env }) {
         pid = evt.pid;
         const sres = await fetch(`${baseUrl}/commands/${pid}/stdin`, {
           method: 'POST',
-          headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
+          headers: appHeaders(bearer),
           body: JSON.stringify({ data: JSON.stringify({ prompt }) }),
         });
         if (!sres.ok) {
@@ -244,6 +284,7 @@ async function runTurn({ baseUrl, bearer, prompt, env }) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const c = cfg();
   const prompt = process.argv[2] ?? 'Say hello in exactly one word.';
+  if (process.env.APP_PASSWORD) await loginAppsProxy(c.baseUrl, process.env.APP_PASSWORD);
   await uploadRuntime(c);
   const ip = await discoverContainerIp(c);
   const sessionToken = await mintSession(ip);
