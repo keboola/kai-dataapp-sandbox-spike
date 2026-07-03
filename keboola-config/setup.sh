@@ -16,7 +16,8 @@ npm install
 # follow-up is to make those dirs env-configurable in config.ts.
 RUNTIME_DIR=/tmp/kai-agent
 WORKSPACE_DIR=/tmp/kai-workspace
-mkdir -p "$RUNTIME_DIR" "$WORKSPACE_DIR/tool-results"
+HOME_DIR=/tmp/kai-home
+mkdir -p "$RUNTIME_DIR" "$WORKSPACE_DIR/tool-results" "$HOME_DIR"
 
 cd "$RUNTIME_DIR"
 npm init -y >/dev/null

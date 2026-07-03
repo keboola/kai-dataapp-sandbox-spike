@@ -113,6 +113,48 @@ test('POST /commands with a bogus cmd streams an error event and ends', async ()
   }
 });
 
+test('GET /commands/:pid/stream re-attaches to a running child', async () => {
+  // Spawn a child that prints after a delay so a second subscriber can attach
+  // before any output is produced, then confirm the re-attached GET stream gets
+  // a pid event followed by the live stdout chunk.
+  const res = await fetch(`${base}/commands`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ cmd: 'sh', args: ['-c', 'sleep 0.2; echo hi'] }),
+  });
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  const first = JSON.parse(dec.decode((await reader.read()).value).split('data: ')[1]);
+  assert.equal(first.type, 'pid');
+  const attached = await fetch(`${base}/commands/${first.pid}/stream`);
+  assert.equal(attached.headers.get('content-type'), 'text/event-stream');
+  const events = await readSse(attached, (evt) => evt.type === 'stdout');
+  assert.ok(events.some((e) => e.type === 'pid' && e.pid === first.pid));
+  const out = events.find((e) => e.type === 'stdout');
+  assert.match(out.chunk, /hi/);
+  await reader.cancel();
+});
+
+test('GET /commands/:pid/stream 404s for unknown pid', async () => {
+  const res = await fetch(`${base}/commands/999999/stream`);
+  assert.equal(res.status, 404);
+});
+
+test('POST /files/read returns base64 when requested', async () => {
+  const p = path.join(os.tmpdir(), 'kai-test-bin');
+  await fetch(`${base}/files/write`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: p, data: 'AAEC', encoding: 'base64' }),
+  });
+  const res = await fetch(`${base}/files/read`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: p, encoding: 'base64' }),
+  });
+  assert.equal((await res.json()).data, 'AAEC');
+});
+
 test('bearer auth blocks missing token but allows health', async () => {
   const app = createApp({ bearer: 'secret' });
   const s = app.listen(0);
